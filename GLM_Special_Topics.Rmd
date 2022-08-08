@@ -1,0 +1,292 @@
+---
+title: "Special Topics in GLM"
+output: github_document
+---
+
+```{r}
+#install.packages("car")
+library("car")
+#install.packages("corrplot")
+library(corrplot)
+#install.packages("glmnet")
+library(glmnet)
+
+```
+
+
+# Background
+This is a demonstration used in my presentation at the ASM SOA Joint Seminar. In this example, we want to predict the claim numbers of different auto insurance policies and explain the driving forces.
+
+# Exploratory Data Analysis 
+## Data Description
+1.  **IDpol** The policy ID (used to link with the claims dataset 
+2.  **ClaimNb** Number of claims during the exposure period (numerical) 
+3.  **Exposure** The exposure period (numerical)
+4.  **Area** The area code (factor)
+5.  **VehPower** The power of the car (ordered categorical)
+6.  **VehAge** The vehicle age, in years. 
+7.  **DrivAge** The driver age, in years (in France, people can drive a car at 18, numerical)
+8.  **BonusMalus** Bonus/malus, between 50 and 350: <100 means bonus, >100 means malus in France(numerical)
+9.  **VehBrand** The car brand (factor)
+10. **VehGas** The car gas, Diesel or regular(factor)
+11. **Density** The density of inhabitants (number of inhabitants per km2) in the city the driver of the car lives in,numerical)
+12. **Region** The policy regions in France (based on a standard French classification,factor)
+
+## Read the Data
+```{r}
+# In R Studio, Session--> Set Working Directory --> Choose Directory(to the data source)
+data = read.csv("freMTPL2freq.csv", header=TRUE)
+# Remove 1st column
+drops <- c("IDpol")
+data <- data[ , !(names(data) %in% drops)]
+head(data)
+```
+
+## Exploratory Data Analysis
+### Numerical
+
+```{r}
+# Reset
+par(mfrow=c(1,1))
+
+# Number of Plot 
+par(mfrow=c(3,2))
+
+# Plot claim number vs Vehicle's age
+plot(ClaimNb~VehAge, data=data, main="Claim Number vs. Vehicle's Age", col="grey", pch = 16)
+abline(lm(ClaimNb~VehAge, data=data), col="red")
+
+# Plot claim number vs Driver's age
+plot(ClaimNb~DrivAge, data=data, main="Claim Number vs. Driver's Age", col="grey", pch = 16)
+abline(lm(ClaimNb~DrivAge, data=data), col="red")
+
+# Plot claim number vs Vehicle Power
+plot(ClaimNb~VehPower, data=data, main="Claim Number vs. Vehicle Power", col="grey", pch = 16)
+abline(lm(ClaimNb~VehPower, data=data), col="red")
+
+# Plot claim number vs BonusMalus
+plot(ClaimNb~BonusMalus, data=data, main="Claim Number vs. BonusMalus", col="grey", pch = 16)
+abline(lm(ClaimNb~BonusMalus, data=data), col="red")
+
+# Plot claim number vs population density of the city
+plot(ClaimNb~Density, data=data, main="Claim Number vs. Population Density", col="grey", pch = 16)
+abline(lm(ClaimNb~Density, data=data), col="red")
+
+```
+### Categorical
+```{r}
+# Reset
+par(mfrow=c(1,1))
+par(mfrow=c(2,2))
+
+# Plot Claim Number vs Area
+plot(ClaimNb~Area, data=data, main="Claim Number vs. Area", col="gray", pch = 16)
+# Plot Claim Number vs Vehicle Brand
+plot(ClaimNb~VehBrand, data=data, main="Claim Number vs. Vehicle Brand", col="gray", pch = 16)
+# Plot Claim Number vs Vehicle Gas
+plot(ClaimNb~VehGas, data=data, main="Claim Number vs. Vehicle Gas", col="gray",pch = 16)
+# Plot Claim Number vs Region
+plot(ClaimNb~Region, data=data, main="Claim Number vs. Region", col="gray",pch = 16)
+# Reset
+par(mfrow=c(1,1))
+```
+### Correlation Between Predictors
+We want to avoid including variables with strong correlations.
+```{r}
+par(mfrow=c(1,1))
+# Drop response, exposure and categorical variables 
+drops <- c("Exposure","ClaimNb","Area", "VehBrand", "VehGas", "Region")
+corrplot(cor(data[ , !(names(data) %in% drops)]))
+
+```
+
+### Split Between Train and Test
+```{r}
+## 70% of the sample size goes to training dataset
+train_size <- floor(0.7 * nrow(data))
+
+set.seed(1)
+train_ind <- sample(seq_len(nrow(data)), size = train_size)
+
+train <- data[train_ind, ]
+test <- data[-train_ind, ]
+head(train)
+
+```
+# Model Developement
+## GLM
+```{r}
+#Exposure is not a predictor
+model1 = glm(ClaimNb ~ . -Exposure, data=train, family= poisson(link = log), weights=Exposure)
+summary(model1)
+```
+
+### GLM Goodness of Fit
+For both tests, the p-value is 1, suggesting a good fit
+```{r}
+# Deviance residuals test
+cat("Deviance residuals test p-value:",
+1-pchisq(model1$deviance, model1$df.residual), end="\n")
+
+# Pearson residuals test
+pResid <- resid(model1, type = "pearson")
+cat("Pearson residuals test p-value:",
+1-pchisq(sum(pResid^2), model1$df.residual))
+
+```
+### GLM Prediction
+```{r}
+test$glm_pred = predict(model1, newdata = test, type="response")
+```
+
+##LASSO
+```{r}
+x = model.matrix(~.,data = subset(train, select=-c(ClaimNb,Exposure)))
+set.seed(1874)
+cv.lasso =cv.glmnet(x = x, 
+                    y = train$ClaimNb,
+                    weights = train$Exposure,
+                    family = "poisson",
+                    #LASSO
+                    alpha = 1,
+                    nfolds=20)
+
+cat("CV Optimized lambda:\n")
+cv.lasso$lambda.min
+plot(cv.lasso)
+
+
+```
+###LASSO Coefficient Path
+```{r}
+# Plot the regression coefficient path
+mod_LASSO_path = glmnet(x = x, 
+                        y = train$ClaimNb,
+                        weights = train$Exposure,
+                        family= "poisson",
+                        alpha=1)
+plot(mod_LASSO_path,xvar="lambda",label=TRUE,lwd=2)
+abline(v=log(cv.lasso$lambda.min),col='black',lty = 2,lwd=2)
+
+
+```
+### LASSO Coefficient
+```{r}
+coef(mod_LASSO_path, s=cv.lasso$lambda.min)
+```
+###Model Prediction
+```{r}
+#Prepare test dataset, remember to remove the glm prediction
+newx = model.matrix(~.,data = subset(test, select=-c(ClaimNb,Exposure,glm_pred )))
+test$lasso_pred = predict(mod_LASSO_path, s = cv.lasso$lambda.min, newx = newx,type = 'response')
+
+```
+
+# Influential Point Diagnosis
+## Identify Influential Points
+```{r}
+# Outlier Test
+outlierTest(model1)
+# Count numer of coefficients p from glm
+p = length(model1$coefficients)
+n = nrow(train)
+plot(model1, which = 4, id.n = 3)
+abline(h = p/n *4, col="red")
+
+```
+## Residual and Leverage
+```{r}
+plot(model1, which = 5)
+```
+
+## Remove Influential Points
+```{r}
+
+train_rem <- train[-c(211373, 645165, 630042), ]
+
+model2 = glm(ClaimNb ~ . -Exposure, data=train_rem, family= poisson(link = log), weights=Exposure)
+summary(model2)
+
+test$glm_pred_rem = predict(model2, newdata = test, type="response")
+
+```
+# Model Comparison
+## Gini Index of plain GLM 
+```{r}
+
+#
+# Gini index calculations
+# code credit: "Predictive Modeling Applications in Actuarial Science", vol 2, chapter 1
+
+# on testing data-GLM
+o <- with(test, order(glm_pred))
+x <- with(test, cumsum(Exposure[o])/sum(Exposure))
+y <- with(test, cumsum(ClaimNb[o])/sum(ClaimNb))
+
+dx <- x[-1] - x[-length(x)]
+h <- (y[-1] + y[-length(y)])/2
+gini <- 2 * (0.5 - sum(h * dx))
+
+#op <- par(mar = c(5,4,0,0)+0.2)
+plot(x = x, y = y, type = "n")
+lines(x = c(0,1), y = c(0,1), col = "grey")
+lines(x = x, y = y, col = "red")
+
+cat("Gini Index:", gini)
+
+```
+### Gini Index of LASSO
+```{r}
+### Gini Index of LASSO 
+
+#
+# Gini index calculations
+#
+
+# on testing data-GLM
+o <- with(test, order(lasso_pred))
+x <- with(test, cumsum(Exposure[o])/sum(Exposure))
+y <- with(test, cumsum(ClaimNb[o])/sum(ClaimNb))
+
+dx <- x[-1] - x[-length(x)]
+h <- (y[-1] + y[-length(y)])/2
+gini <- 2 * (0.5 - sum(h * dx))
+
+#op <- par(mar = c(5,4,0,0)+0.2)
+plot(x = x, y = y, type = "n")
+lines(x = c(0,1), y = c(0,1), col = "grey")
+lines(x = x, y = y, col = "red")
+
+cat("Gini Index:", gini)
+
+```
+
+```{r}
+### Gini Index of GLM with influential points removed
+
+#
+# Gini index calculations
+#
+
+# on testing data-GLM with influential points removed
+o <- with(test, order(glm_pred_rem))
+x <- with(test, cumsum(Exposure[o])/sum(Exposure))
+y <- with(test, cumsum(ClaimNb[o])/sum(ClaimNb))
+
+dx <- x[-1] - x[-length(x)]
+h <- (y[-1] + y[-length(y)])/2
+gini <- 2 * (0.5 - sum(h * dx))
+
+#op <- par(mar = c(5,4,0,0)+0.2)
+plot(x = x, y = y, type = "n")
+lines(x = c(0,1), y = c(0,1), col = "grey")
+lines(x = x, y = y, col = "red")
+
+cat("Gini Index:", gini)
+```
+
+
+
+
+
+
